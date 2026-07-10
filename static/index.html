@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Local AI</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+    onload="window._katexReady = true"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="sidebar">
+  <div id="sidebar-header">
+    <span>History</span>
+    <button id="new-chat-btn" onclick="newChat()">+ New</button>
+  </div>
+  <div id="sessions"></div>
+</div>
+
+<div id="main">
+
+  <div id="chat-panel">
+    <div id="messages"></div>
+
+    <div id="input-area">
+      <div id="file-preview"></div>
+      <div id="input-row">
+        <button id="upload-btn" onclick="document.getElementById('file-input').click()">📎</button>
+        <input type="file" id="file-input" multiple onchange="handleFiles(event)">
+        <textarea
+          id="input"
+          placeholder="Write a message... (Enter to send, Shift+Enter for new line)"
+          onkeydown="if(event.key==='Enter' && !event.shiftKey){ event.preventDefault(); send() }"
+        ></textarea>
+        <button id="send-btn" onclick="send()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="inspector">
+    <div id="inspector-header">
+      <span>Loop Inspector</span>
+      <button id="reload-prompt-btn" onclick="reloadPrompt()" title="Reload system_prompt.txt">↺ Prompt</button>
+    </div>
+    <div id="inspector-body">
+      <div class="isec">
+        <div class="isec-header" onclick="toggleSection(this)"><span>Loop</span><span class="toggle-icon">▼</span></div>
+        <div class="isec-body open" id="isec-loop"></div>
+      </div>
+      <div class="isec">
+        <div class="isec-header" onclick="toggleSection(this)"><span>User</span><span class="toggle-icon">▶</span></div>
+        <div class="isec-body" id="isec-user"></div>
+      </div>
+      <div id="isec-dynamic"></div>
+      <div class="isec">
+        <div class="isec-header" onclick="toggleSection(this)"><span>Response</span><span class="toggle-icon">▶</span></div>
+        <div class="isec-body" id="isec-response"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

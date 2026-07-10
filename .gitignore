@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+db/
+uploads/
+.DS_Store
+.Rhistory
+.claude/
