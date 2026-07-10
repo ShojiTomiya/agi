@@ -1,25 +1,25 @@
-# Personal AI Assistant
+# Local AI chat
 
-A self-hosted AI chat app with an agentic loop, streaming responses, and a persistent Python execution sandbox. Built with FastAPI, SQLite, and vanilla JS.
+A self-hosted AI chat app with an agentic loop, streaming responses and python execution sandbox. Built with FastAPI, SQLite, and vanilla JS.
 
 ## Features
 
-- **Multi-provider support** - Groq, Ollama (local), Gemini via a single OpenAI-compatible config
+- **Multi-provider support** - Groq, Ollama (local), Gemini
 - **Streaming responses** - tokens rendered in real time with Markdown and LaTeX (KaTeX)
-- **Python sandbox** - persistent Docker kernel per session; variables survive between messages, matplotlib charts render inline
+- **Python sandbox** - Docker kernel per session; variables survive between messages, matplotlib charts render inline
 - **Web search** - via Tavily API
 - **Image generation** - FLUX.1-dev via HuggingFace free tier
 - **Image analysis** - vision model for uploaded images and generated charts
-- **File attachments** - PDF, Excel, CSV, Jupyter notebooks, images; files available inside the sandbox
+- **File attachments** - PDF, Excel, CSV, Jupyter notebooks, images
 - **Loop inspector**- sidebar showing each LLM call, tool call, and result
-- **Session management** - persistent history, rename, delete, edit messages
+- **Session management** - history, rename, delete, edit messages
 
 ## Setup
 
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/yourname/agi.git
+git clone https://github.com/ShojiTomiya/agi.git
 cd agi
 pip install -r requirements.txt
 ```
@@ -77,7 +77,7 @@ Switch providers by setting `LLM_PROVIDER` in `.env`. Models and parameters are 
 
 ## Python sandbox
 
-Each chat session gets a dedicated Docker container with a persistent Python namespace - variables defined in one message are available in the next, like a Jupyter notebook. The model can:
+Each chat session gets a dedicated Docker container with a python namespace - variables defined in one message are available in the next, like a Jupyter notebook. The model can:
 
 - Run calculations and data analysis
 - Generate charts (`plt.show()` captures them automatically)
@@ -108,5 +108,5 @@ static/
 ## Requirements
 
 - Python 3.11+
-- Docker (for Python execution sandbox)
+- Docker (for python execution sandbox)
 - API keys as needed (see `.env` section above)
