@@ -257,6 +257,7 @@
     .loop-item[data-type="user"]        .loop-dot { background: #0a7cff; }
     .loop-item[data-type="file"]        .loop-dot { background: #64748b; }
     .loop-item[data-type="llm"]         .loop-dot { background: #f59e0b; }
+    .loop-item[data-type="reasoning"]   .loop-dot { background: #ec4899; }
     .loop-item[data-type="tool_call"]   .loop-dot { background: #a78bfa; }
     .loop-item[data-type="tool_result"] .loop-dot { background: #6366f1; }
     .loop-item[data-type="response"]    .loop-dot { background: #10b981; }
@@ -309,7 +310,7 @@
     .tool-indicator {
       display: block;
       font-size: 12px;
-      color: var(--text-muted);
+      color: #888;
       font-style: italic;
       padding: 2px 0;
     }
@@ -417,7 +418,7 @@
     /* typing indicator */
     .typing-indicator {
       font-size: 13px;
-      color: var(--text-muted);
+      color: #888;
       font-style: italic;
       padding: 4px 0;
       align-self: flex-start;

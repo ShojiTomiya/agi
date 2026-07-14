@@ -11,7 +11,7 @@ A self-hosted AI chat app with an agentic loop, streaming responses and python e
 - **Image generation** - FLUX.1-dev via HuggingFace free tier
 - **Image analysis** - vision model for uploaded images and generated charts
 - **File attachments** - PDF, Excel, CSV, Jupyter notebooks, images
-- **Loop inspector**- sidebar showing each LLM call, tool call, and result
+- **Loop inspector** - sidebar showing each LLM call, reasoning, tool call, and result; live "Thinking…" indicator in chat while the model is working
 - **Session management** - history, rename, delete, edit messages
 
 ## Setup
@@ -71,7 +71,7 @@ Switch providers by setting `LLM_PROVIDER` in `.env`. Models and parameters are 
 
 | Provider | Models | Notes |
 |----------|--------|-------|
-| `groq` | llama-4-scout, etc. | Fast, free tier available |
+| `groq` | gpt-oss-120b (text), qwen3.6-27b (vision) | Fast, free tier available |
 | `ollama` | qwen3:8b, qwen2.5vl:7b | Fully local, no API key |
 | `gemini` | gemini-2.0-flash | Free tier via AI Studio |
 

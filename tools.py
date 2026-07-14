@@ -87,7 +87,7 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "filename": {"type": "string", "description": "Filename of the image to analyze"},
+                    "filename": {"type": "string", "description": "Bare filename only, e.g. 'photo.png' — no path or directory prefix (this is unrelated to execute_python's /workspace/ sandbox path)"},
                     "question": {"type": "string", "description": "What to ask about the image"}
                 },
                 "required": ["filename", "question"]
@@ -182,6 +182,7 @@ def generate_image(prompt: str, width: int = 1024, height: int = 1024, model: st
 
 
 def analyze_image(filename: str, question: str, context_files: list = None) -> str:
+    filename = os.path.basename(filename)
     image_path = None
 
     for att in (context_files or []):

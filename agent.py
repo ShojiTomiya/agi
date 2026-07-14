@@ -85,6 +85,7 @@ def run_agent(message: str, file_paths: list, filenames: list, history: list, se
             }
 
             answer = ""
+            reasoning = ""
             tc_map = {}
             usage = None
             groq_failed = None
@@ -110,6 +111,12 @@ def run_agent(message: str, file_paths: list, filenames: list, history: list, se
                         answer += delta.content
                         yield {"type": "token", "token": delta.content}
 
+                    reasoning_delta = getattr(delta, "reasoning", None)
+                    if reasoning_delta:
+                        if not reasoning:
+                            yield {"type": "step", "step": "reasoning_start"}
+                        reasoning += reasoning_delta
+
                     if delta.tool_calls:
                         for tc_chunk in delta.tool_calls:
                             idx = tc_chunk.index
@@ -134,6 +141,9 @@ def run_agent(message: str, file_paths: list, filenames: list, history: list, se
                     yield {"type": "done", "answer": failed, "usage": None, "model": model, "chart_paths": all_chart_paths, "file_paths": all_file_paths}
                     return
                 raise
+
+            if reasoning:
+                yield {"type": "step", "step": "reasoning", "text": reasoning}
 
             tool_calls = [
                 SimpleNamespace(

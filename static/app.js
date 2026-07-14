@@ -162,18 +162,29 @@ function newChat() {
 }
 
 // ── file upload ───────────────────────────────────
+// Safari can silently drop the file bytes from a fetch()+FormData body when
+// the File object hasn't been fully read yet (seen with large/iCloud-backed
+// files) — reading it into a Blob first forces materialization and avoids
+// the server seeing an empty/missing "file" field.
+async function buildFileFormData(file) {
+  const buf = await file.arrayBuffer();
+  const blob = new Blob([buf], { type: file.type });
+  const form = new FormData();
+  form.append("file", blob, file.name);
+  return form;
+}
+
 async function handleFiles(event) {
   const files = Array.from(event.target.files);
 
   for (const file of files) {
-    const form = new FormData();
-    form.append("file", file);
+    const form = await buildFileFormData(file);
 
     const res = await fetch("/upload", { method: "POST", body: form });
 
     if (!res.ok) {
       const err = await res.json();
-      appendError(`Upload failed: ${err.detail}`);
+      appendError(`Upload failed: ${formatErrorDetail(err.detail)}`);
       continue;
     }
 
@@ -417,6 +428,9 @@ function renderLoopTab() {
     const secId = `isec-event-${i}`;
     if (ev.step === "llm_call") {
       items.push(loopRow("llm", "LLM call", ev.model || "", secId));
+    } else if (ev.step === "reasoning") {
+      const preview = (ev.text || "").slice(0, 40);
+      items.push(loopRow("reasoning", "Reasoning", preview + (ev.text?.length > 40 ? "…" : ""), secId));
     } else if (ev.step === "tool_call") {
       items.push(loopRow("tool_call", ev.name, JSON.stringify(ev.args || {}), secId));
     } else if (ev.step === "tool_result") {
@@ -468,6 +482,9 @@ function renderDynamicSections() {
         .join('\n\n<span class="step-sep">─────────────</span>\n\n');
       parts.push(makeSec(id, label, `${meta}<pre class="itab-pre">${bodyHtml}</pre>`));
 
+    } else if (ev.step === "reasoning") {
+      parts.push(makeSec(id, "Reasoning", `<pre class="itab-pre">${escapeHtml(ev.text || "")}</pre>`));
+
     } else if (ev.step === "tool_call") {
       const args = JSON.stringify(ev.args || {}, null, 2);
       parts.push(makeSec(id, ev.name, `<pre class="itab-pre"><span class="step-role">[ARGS]</span>\n${escapeHtml(args)}</pre>`));
@@ -495,7 +512,7 @@ function appendStep(step) {
     renderUserTab();
   } else if (step.step === "file_read") {
     inspectorData.file_reads.push(step);
-  } else if (step.step === "llm_call" || step.step === "tool_call" || step.step === "tool_result") {
+  } else if (step.step === "llm_call" || step.step === "reasoning" || step.step === "tool_call" || step.step === "tool_result") {
     inspectorData.events.push(step);
     renderDynamicSections();
   } else if (step.step === "response") {
@@ -529,8 +546,13 @@ async function send() {
   const userDiv = appendMessage("user", text, files);
   showTypingIndicator();
 
-  // placeholder div for streaming assistant response
-  const assistantDiv = appendMessage("assistant", "");
+  // assistant bubble is created lazily on first content/indicator so an
+  // empty message box isn't visible while only "typing..." is shown
+  let assistantDiv = null;
+  function ensureAssistantDiv() {
+    if (!assistantDiv) assistantDiv = appendMessage("assistant", "");
+    return assistantDiv;
+  }
   let accumulated = "";
 
   try {
@@ -583,6 +605,7 @@ async function send() {
 
         } else if (eventType === "token") {
           removeTypingIndicator();
+          ensureAssistantDiv();
           removeToolIndicator(assistantDiv);
           accumulated += data.token;
           renderMd(assistantDiv, accumulated);
@@ -591,19 +614,29 @@ async function send() {
             document.getElementById("messages").scrollHeight;
 
         } else if (eventType === "step") {
-          if (data.step === "tool_call") {
-            showToolIndicator(assistantDiv, data.name);
-          } else if (data.step === "tool_result") {
-            removeToolIndicator(assistantDiv);
+          if (data.step === "llm_call" || data.step === "reasoning_start") {
+            removeTypingIndicator();
+            ensureAssistantDiv();
+            showToolIndicator(assistantDiv, "Thinking");
+            if (data.step === "llm_call") appendStep(data);
+          } else {
+            if (data.step === "tool_call") {
+              removeTypingIndicator();
+              ensureAssistantDiv();
+              showToolIndicator(assistantDiv, data.name);
+            } else if (data.step === "tool_result") {
+              if (assistantDiv) removeToolIndicator(assistantDiv);
+            }
+            appendStep(data);
           }
-          appendStep(data);
 
         } else if (eventType === "error") {
           removeTypingIndicator();
-          assistantDiv.remove();
+          if (assistantDiv) assistantDiv.remove();
           appendError(data.message);
 
         } else if (eventType === "done") {
+          ensureAssistantDiv();
           for (const path of (data.chart_paths || [])) {
             accumulated += `\n\n![chart](/${path})`;
           }
@@ -635,7 +668,7 @@ async function send() {
 
   } catch (err) {
     removeTypingIndicator();
-    assistantDiv.remove();
+    if (assistantDiv) assistantDiv.remove();
     appendError(`Connection error: ${err.message}`);
 
   } finally {
@@ -665,6 +698,13 @@ async function reloadPrompt() {
 }
 
 // ── utils ─────────────────────────────────────────
+function formatErrorDetail(detail) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map(d => d?.msg || JSON.stringify(d)).join("; ");
+  if (detail && typeof detail === "object") return detail.msg || JSON.stringify(detail);
+  return String(detail);
+}
+
 function escapeHtml(str) {
   if (!str) return "";
   return str
@@ -700,14 +740,13 @@ chatPanel.addEventListener("drop", async (e) => {
 
   const files = Array.from(e.dataTransfer.files);
   for (const file of files) {
-    const form = new FormData();
-    form.append("file", file);
+    const form = await buildFileFormData(file);
 
     const res = await fetch("/upload", { method: "POST", body: form });
 
     if (!res.ok) {
       const err = await res.json();
-      appendError(`Upload failed: ${err.detail}`);
+      appendError(`Upload failed: ${formatErrorDetail(err.detail)}`);
       continue;
     }
 
