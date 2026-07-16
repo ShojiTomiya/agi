@@ -3,7 +3,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-co
 RUN pip install --no-cache-dir \
     pandas matplotlib numpy scipy seaborn \
     openpyxl pillow scikit-learn requests \
-    reportlab fpdf2
+    reportlab fpdf2 python-pptx python-docx \
+    sympy statsmodels opencv-python-headless
 WORKDIR /workspace
 RUN mkdir -p /workspace/output
 COPY repl_server.py /repl_server.py

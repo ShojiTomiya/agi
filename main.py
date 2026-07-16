@@ -112,6 +112,11 @@ def rename_session_endpoint(session_id: str, body: dict):
 @app.delete("/sessions/{session_id}/messages/{from_id}")
 def truncate_messages(session_id: str, from_id: int):
     truncate_from_message(session_id, from_id)
+    try:
+        import kernel
+        kernel.stop(session_id)
+    except Exception:
+        pass
     return {"status": "ok"}
 
 @app.post("/reload-prompt")

@@ -37,8 +37,8 @@ async function loadSession(id) {
         const filePaths = (row.metadata?.file_paths || []).map(p => typeof p === "string" ? p : p.path);
         previews = filePaths.map(p => {
           const filename = p.split("_").slice(1).join("_") || p;
-          if (p.match(/\.(png|jpg|jpeg|webp|gif)$/i)) return { previewUrl: "/" + p, filename };
-          return { filename };
+          if (p.match(/\.(png|jpg|jpeg|webp|gif)$/i)) return { path: p, previewUrl: "/" + p, filename };
+          return { path: p, filename };
         });
       }
 
@@ -221,6 +221,7 @@ function appendMessage(role, content, files = [], msgId = null) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   if (msgId) div.dataset.msgId = msgId;
+  div._files = files;
 
   if (role === "user") {
     const topRow = document.createElement("div");
@@ -240,7 +241,7 @@ function appendMessage(role, content, files = [], msgId = null) {
       const id = parseInt(div.dataset.msgId);
       if (!id) return;
       const originalText = div.querySelector("span")?.textContent || "";
-      startEdit(div, id, originalText);
+      startEdit(div, id, originalText, div._files || []);
     };
     topRow.appendChild(editBtn);
     div.appendChild(topRow);
@@ -271,7 +272,7 @@ function appendMessage(role, content, files = [], msgId = null) {
   return div;
 }
 
-function startEdit(div, msgId, originalText) {
+function startEdit(div, msgId, originalText, originalFiles = []) {
   div.innerHTML = "";
 
   const ta = document.createElement("textarea");
@@ -284,7 +285,7 @@ function startEdit(div, msgId, originalText) {
   const confirmBtn = document.createElement("button");
   confirmBtn.className = "edit-confirm";
   confirmBtn.textContent = "✓ Send";
-  confirmBtn.onclick = () => confirmEdit(msgId, ta.value);
+  confirmBtn.onclick = () => confirmEdit(msgId, ta.value, originalFiles);
 
   const cancelBtn = document.createElement("button");
   cancelBtn.className = "edit-cancel";
@@ -294,12 +295,25 @@ function startEdit(div, msgId, originalText) {
   actions.appendChild(cancelBtn);
   actions.appendChild(confirmBtn);
   div.appendChild(ta);
+
+  if (originalFiles.length > 0) {
+    const chipsRow = document.createElement("div");
+    chipsRow.style.cssText = "display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;";
+    originalFiles.forEach(f => {
+      const chip = document.createElement("span");
+      chip.className = "msg-file-chip";
+      chip.textContent = `📎 ${f.filename}`;
+      chipsRow.appendChild(chip);
+    });
+    div.appendChild(chipsRow);
+  }
+
   div.appendChild(actions);
   ta.focus();
   ta.selectionStart = ta.selectionEnd = ta.value.length;
 }
 
-async function confirmEdit(msgId, newText) {
+async function confirmEdit(msgId, newText, originalFiles = []) {
   newText = newText.trim();
   if (!newText) return;
 
@@ -315,6 +329,7 @@ async function confirmEdit(msgId, newText) {
   document.querySelector(".regenerate-btn")?.remove();
 
   document.getElementById("input").value = newText;
+  pendingFiles = originalFiles.filter(f => f.path);
   send();
 }
 

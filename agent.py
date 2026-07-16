@@ -2,7 +2,7 @@ import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from openai import BadRequestError
+from openai import BadRequestError, RateLimitError
 from context import build_user_message, build_context, client
 from config import CONFIG
 from files import process_file
@@ -75,6 +75,7 @@ def run_agent(message: str, file_paths: list, filenames: list, history: list, se
 
     all_chart_paths = []
     all_file_paths = []
+    search_web_calls = 0
     model = CONFIG["model"]
 
     try:
@@ -135,11 +136,23 @@ def run_agent(message: str, file_paths: list, filenames: list, history: list, se
 
             except BadRequestError as e:
                 body = getattr(e.response, "json", lambda: {})()
-                failed = body.get("error", {}).get("failed_generation", "")
+                error_body = body.get("error", {})
+                failed = error_body.get("failed_generation", "")
                 if failed:
                     yield {"type": "token", "token": failed}
                     yield {"type": "done", "answer": failed, "usage": None, "model": model, "chart_paths": all_chart_paths, "file_paths": all_file_paths}
                     return
+                if "tool call validation failed" in error_body.get("message", "").lower():
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "(system: your last tool call was invalid — either the tool doesn't exist or its "
+                            "arguments were malformed/incomplete. You only have search_web (requires 'query'), "
+                            "execute_python, generate_image, analyze_image — there is no browser/file-opening tool. "
+                            "If you already have search results, answer directly instead of searching again.)"
+                        ),
+                    })
+                    continue
                 raise
 
             if reasoning:
@@ -181,7 +194,13 @@ def run_agent(message: str, file_paths: list, filenames: list, history: list, se
 
                 yield {"type": "step", "step": "tool_call", "name": tc.function.name, "args": func_args}
 
-                raw = execute_tool(tc.function.name, func_args, attachments=sandbox_files, session_id=session_id)
+                if tc.function.name == "search_web":
+                    search_web_calls += 1
+
+                if tc.function.name == "search_web" and search_web_calls > 1:
+                    raw = "You already searched the web this turn. Do not search again — answer the user's question now using the results you already have."
+                else:
+                    raw = execute_tool(tc.function.name, func_args, attachments=sandbox_files, session_id=session_id)
 
                 # Normalise to dict
                 if isinstance(raw, dict):
@@ -229,5 +248,9 @@ def run_agent(message: str, file_paths: list, filenames: list, history: list, se
             yield {"type": "done", "answer": failed, "usage": None, "model": model, "chart_paths": all_chart_paths, "file_paths": all_file_paths}
         else:
             yield {"type": "error", "message": f"Unexpected error: {str(e)}"}
+    except RateLimitError as e:
+        body = getattr(e.response, "json", lambda: {})()
+        message = body.get("error", {}).get("message", str(e))
+        yield {"type": "error", "message": f"Rate limit: {message}"}
     except Exception as e:
         yield {"type": "error", "message": f"Unexpected error: {str(e)}"}

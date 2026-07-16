@@ -17,7 +17,10 @@ TOOLS = [
             "description": (
                 "Search the web. Use when you need current information, recent events, "
                 "facts you're not confident about, or anything that may have changed "
-                "after your training cutoff."
+                "after your training cutoff. Returns several detailed excerpts per source — "
+                "this is normally sufficient to answer from. There is no separate tool to "
+                "open/browse a specific page further; if this result is genuinely insufficient, "
+                "call search_web again once with a more specific query, then answer with what you have."
             ),
             "parameters": {
                 "type": "object",
@@ -37,11 +40,9 @@ TOOLS = [
                 "Use for calculations, data analysis, string processing, generating charts, or creating any files. "
                 "Input files attached by the user are available in /workspace by their original filenames. "
                 "Available libraries: pandas, matplotlib, numpy, scipy, seaborn, openpyxl, pillow, "
-                "scikit-learn, requests, reportlab, fpdf2. Do NOT use any other libraries. "
-                "For PDFs with Polish/Unicode text ALWAYS register DejaVu font first. "
-                "With reportlab: from reportlab.pdfbase import pdfmetrics; from reportlab.pdfbase.ttfonts import TTFont; pdfmetrics.registerFont(TTFont('DejaVu', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')) then use fontName='DejaVu'. "
-                "With fpdf2: pdf=FPDF(); pdf.add_font('DejaVu','','/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'); pdf.set_font('DejaVu',size=12) — never use set_font('helvetica') with non-ASCII text. "
-                "Save ALL output files to /workspace/output/. "
+                "scikit-learn, requests, reportlab, fpdf2, python-pptx, python-docx, sympy, "
+                "statsmodels, opencv-python (cv2). Do NOT use any other libraries. "
+                "Save output files anywhere under /workspace/ (e.g. just the filename, or /workspace/output/ — both work). "
                 "For charts use plt.show() — captured automatically."
             ),
             "parameters": {
@@ -98,16 +99,22 @@ TOOLS = [
 
 
 
+MAX_SEARCH_CHARS = 3000
+
+
 def search_web(query: str, max_results: int = 5) -> str:
     try:
-        resp = _tavily.search(query=query, max_results=max_results)
+        resp = _tavily.search(query=query, max_results=max_results, search_depth="advanced")
         results = resp.get("results", [])
         if not results:
             return "No results found."
-        return "\n\n".join(
+        text = "\n\n".join(
             f"[{r['title']}]({r['url']})\n{r['content']}"
             for r in results
         )
+        if len(text) > MAX_SEARCH_CHARS:
+            text = text[:MAX_SEARCH_CHARS] + "\n\n[results truncated — answer with what's above rather than searching again]"
+        return text
     except Exception as e:
         return f"Search failed: {e}"
 

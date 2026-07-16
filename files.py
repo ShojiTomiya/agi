@@ -3,12 +3,15 @@ from pathlib import Path
 
 MAX_CHARS = 50000
 
+MAX_PREVIEW_ROWS = 5
+
 SUPPORTED_EXTENSIONS = {
     "image": ["png", "jpg", "jpeg", "webp", "gif"],
     "pdf":   ["pdf"],
     "notebook": ["ipynb"],
     "excel": ["xlsx", "xls"],
     "csv":   ["csv"],
+    "pptx":  ["pptx"],
     "text":  ["md", "txt", "py", "js", "ts", "json", "yaml", "yml", "html", "css"],
 }
 
@@ -42,6 +45,11 @@ def process_file(path: str, filename: str) -> dict:
 
         if ext in SUPPORTED_EXTENSIONS["csv"]:
             result = _process_csv(path, filename)
+            result["original_path"] = path
+            return result
+
+        if ext in SUPPORTED_EXTENSIONS["pptx"]:
+            result = _process_pptx(path, filename)
             result["original_path"] = path
             return result
 
@@ -118,14 +126,21 @@ def _process_excel(path: str, filename: str) -> dict:
 
     for sheet_name in xl.sheet_names:
         df = xl.parse(sheet_name)
-        sheets.append(f"### Arkusz: {sheet_name}\n{df.to_markdown(index=False)}")
+        sheets.append(
+            f"### Sheet: {sheet_name} (shape: {df.shape[0]} rows × {df.shape[1]} cols)\n"
+            f"Columns: {', '.join(str(c) for c in df.columns)}\n\n"
+            f"First {min(MAX_PREVIEW_ROWS, len(df))} rows:\n{df.head(MAX_PREVIEW_ROWS).to_markdown(index=False)}"
+        )
 
     text = "\n\n".join(sheets)
+    text += f"\n\n(Full data available in Python sandbox at /workspace/{filename} — read with pd.read_excel('/workspace/{filename}', sheet_name=...))"
     return {"type": "text", "content": _truncate(text, filename), "name": filename}
 
 
 def _process_csv(path: str, filename: str) -> dict:
     import csv as _csv
+    import pandas as pd
+
     for encoding in ["utf-8", "utf-8-sig", "latin-1", "cp1250"]:
         try:
             content = open(path, encoding=encoding).read()
@@ -139,11 +154,46 @@ def _process_csv(path: str, filename: str) -> dict:
                 if any("," in p for p in line.split(sep)):
                     decimal = ","
                     break
-            hint = f"[CSV: sep='{sep}', decimal='{decimal}']\n"
-            return {"type": "text", "content": _truncate(hint + content, filename), "name": filename}
+
+            df = pd.read_csv(path, sep=sep, decimal=decimal, encoding=encoding)
+            text = (
+                f"[CSV: sep='{sep}', decimal='{decimal}'; shape: {df.shape[0]} rows × {df.shape[1]} cols]\n"
+                f"Columns: {', '.join(str(c) for c in df.columns)}\n\n"
+                f"First {min(MAX_PREVIEW_ROWS, len(df))} rows:\n{df.head(MAX_PREVIEW_ROWS).to_markdown(index=False)}\n\n"
+                f"(Full data available in Python sandbox at /workspace/{filename} — read with "
+                f"pd.read_csv('/workspace/{filename}', sep='{sep}', decimal='{decimal}'))"
+            )
+            return {"type": "text", "content": _truncate(text, filename), "name": filename}
         except UnicodeDecodeError:
             continue
     return {"type": "error", "content": "Could not read the CSV file.", "name": filename}
+
+
+def _process_pptx(path: str, filename: str) -> dict:
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return {"type": "error", "content": "python-pptx not installed - use: pip install python-pptx", "name": filename}
+
+    prs = Presentation(path)
+    slides = []
+
+    for i, slide in enumerate(prs.slides, 1):
+        parts = [f"[Slide {i}]"]
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                parts.append(shape.text_frame.text)
+            if shape.has_table:
+                rows = ["\t".join(cell.text for cell in row.cells) for row in shape.table.rows]
+                parts.append("\n".join(rows))
+        if slide.has_notes_slide and slide.notes_slide.notes_text_frame.text.strip():
+            parts.append(f"[notes]\n{slide.notes_slide.notes_text_frame.text}")
+        slides.append("\n".join(parts))
+
+    text = "\n\n".join(slides)
+    if not text.strip():
+        return {"type": "error", "content": "No text found in presentation.", "name": filename}
+    return {"type": "text", "content": _truncate(text, filename), "name": filename}
 
 
 def _process_text(path: str, filename: str) -> dict:

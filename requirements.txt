@@ -9,3 +9,4 @@ pandas
 openpyxl
 tavily-python
 requests
+python-pptx

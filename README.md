@@ -10,7 +10,7 @@ A self-hosted AI chat app with an agentic loop, streaming responses and python e
 - **Web search** - via Tavily API
 - **Image generation** - FLUX.1-dev via HuggingFace free tier
 - **Image analysis** - vision model for uploaded images and generated charts
-- **File attachments** - PDF, Excel, CSV, Jupyter notebooks, images
+- **File attachments** - PDF, Excel, CSV, PowerPoint, Jupyter notebooks, images (CSV/Excel show a preview in chat; full data available in the Python sandbox)
 - **Loop inspector** - sidebar showing each LLM call, reasoning, tool call, and result; live "Thinking…" indicator in chat while the model is working
 - **Session management** - history, rename, delete, edit messages
 
@@ -55,7 +55,7 @@ The Python execution sandbox runs in Docker. Build the image once:
 docker build -f Dockerfile.sandbox -t agi-sandbox:latest .
 ```
 
-The image includes: pandas, matplotlib, numpy, scipy, seaborn, scikit-learn, reportlab, fpdf2, openpyxl, Pillow, and DejaVu fonts (for Unicode/Polish text in PDFs).
+The image includes: pandas, matplotlib, numpy, scipy, seaborn, scikit-learn, reportlab, fpdf2, python-pptx, python-docx, sympy, statsmodels, opencv-python-headless, openpyxl, Pillow, and DejaVu fonts (for Unicode/Polish text in PDFs).
 
 ### 4. Run
 
@@ -71,8 +71,8 @@ Switch providers by setting `LLM_PROVIDER` in `.env`. Models and parameters are 
 
 | Provider | Models | Notes |
 |----------|--------|-------|
-| `groq` | gpt-oss-120b (text), qwen3.6-27b (vision) | Fast, free tier available |
-| `ollama` | qwen3:8b, qwen2.5vl:7b | Fully local, no API key |
+| `groq` | gpt-oss-120b (text), qwen3.6-27b (vision) | Free tier - tight limits: 8K tokens/min, 200K tokens/day per model |
+| `ollama` | qwen3:8b, qwen2.5vl:7b | Fully local, no API key, no rate limits |
 | `gemini` | gemini-2.0-flash | Free tier via AI Studio |
 
 ## Python sandbox
@@ -81,7 +81,7 @@ Each chat session gets a dedicated Docker container with a python namespace - va
 
 - Run calculations and data analysis
 - Generate charts (`plt.show()` captures them automatically)
-- Create files (Excel, PDF, CSV) - available for download in chat
+- Create files (Excel, PDF, CSV, Word, PowerPoint) - available for download in chat
 - Read files attached by the user (`/workspace/<filename>`)
 
 Output files are returned as download buttons in the assistant's response.
@@ -95,7 +95,7 @@ tools.py           # Tool definitions and implementations
 kernel.py          # Docker sandbox lifecycle management
 repl_server.py     # HTTP REPL server running inside the container
 context.py         # Message history, system prompt, token management
-files.py           # File reading (PDF, Excel, CSV, images, notebooks)
+files.py           # File reading (PDF, Excel, CSV, PowerPoint, images, notebooks)
 config.py          # Provider configs
 database.py        # SQLite session and message storage
 Dockerfile.sandbox
@@ -110,3 +110,11 @@ static/
 - Python 3.11+
 - Docker (for python execution sandbox)
 - API keys as needed (see `.env` section above)
+
+---
+
+**Notes:**
+
+- This project has only been tested against the Groq API. Ollama and Gemini configs are present in `config.py` but haven't been verified end-to-end - expect rough edges if you switch providers.
+- gpt-oss models on Groq have a native `browser_search` tool that avoids search-related tool-call errors, but it's very token-heavy (a single complex query can burn tens of thousands of tokens - a meaningful chunk of the free tier's daily budget). This app sticks with Tavily's `search_web` instead. gpt-oss can still occasionally try to search multiple times in one turn (a trained model quirk, not fully fixable via prompting), so `agent.py` hard-caps `search_web` to one real call per turn - further attempts get a canned "already searched, answer now" response instead of burning tokens on another search.
+- Editing a message resets that session's entire Python sandbox container, not just state from the edited point onward - any variables or files from earlier turns in the same session are lost too.
