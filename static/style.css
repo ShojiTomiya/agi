@@ -194,6 +194,12 @@
       text-align: left;
     }
     .msg.assistant th { background: #f4f4f4; }
+    /* a wide formula scrolls inside the bubble instead of stretching it */
+    .msg.assistant .katex-display {
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 2px 0;
+    }
 
     .step-model-name { color: #aaa; font-weight: 400; }
 
@@ -261,6 +267,9 @@
     .loop-item[data-type="tool_call"]   .loop-dot { background: #a78bfa; }
     .loop-item[data-type="tool_result"] .loop-dot { background: #6366f1; }
     .loop-item[data-type="response"]    .loop-dot { background: #10b981; }
+    .loop-item[data-type="wait"]        .loop-dot { background: #94a3b8; }
+    .loop-item[data-type="retry"]       .loop-dot { background: #fb923c; }
+    .loop-item[data-type="error"]       .loop-dot { background: #e05555; }
 
     .loop-label  { color: #444; min-width: 72px; }
     .loop-detail { color: #aaa; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
@@ -414,6 +423,9 @@
       color: #cc0000;
       align-self: flex-start;
     }
+
+    /* the turn currently shown in the loop inspector */
+    .msg.inspected { box-shadow: 0 0 0 2px rgba(10, 124, 255, 0.35); }
 
     /* typing indicator */
     .typing-indicator {

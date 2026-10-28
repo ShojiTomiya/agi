@@ -28,8 +28,23 @@ def init_db():
             FOREIGN KEY (session_id) REFERENCES sessions(id)
         );
                        
-        CREATE INDEX IF NOT EXISTS idx_messages_session 
+        CREATE INDEX IF NOT EXISTS idx_messages_session
         ON messages(session_id);
+
+        -- every step of the agent loop (LLM calls, tool calls/results, waits, errors),
+        -- keyed by the user message that started the turn
+        CREATE TABLE IF NOT EXISTS steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            user_msg_id INTEGER,
+            seq INTEGER,
+            kind TEXT,
+            data TEXT,
+            created_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_steps_turn
+        ON steps(user_msg_id);
     """)
     conn.commit()
     conn.close()
@@ -94,8 +109,27 @@ def get_messages(session_id: str) -> list:
 def truncate_from_message(session_id: str, from_id: int):
     conn = get_conn()
     conn.execute("DELETE FROM messages WHERE session_id = ? AND id >= ?", (session_id, from_id))
+    conn.execute("DELETE FROM steps WHERE session_id = ? AND user_msg_id >= ?", (session_id, from_id))
     conn.commit()
     conn.close()
+
+def save_step(session_id: str, user_msg_id: int, seq: int, kind: str, data: dict):
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO steps (session_id, user_msg_id, seq, kind, data, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (session_id, user_msg_id, seq, kind, json.dumps(data), datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+def get_turn_steps(user_msg_id: int) -> list:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT data FROM steps WHERE user_msg_id = ? ORDER BY seq",
+        (user_msg_id,)
+    ).fetchall()
+    conn.close()
+    return [json.loads(r[0]) for r in rows]
 
 def get_sessions() -> list:
     conn = get_conn()
@@ -108,6 +142,7 @@ def get_sessions() -> list:
 def delete_session(session_id: str):
     conn = get_conn()
     conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+    conn.execute("DELETE FROM steps WHERE session_id = ?", (session_id,))
     conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
     conn.commit()
     conn.close()

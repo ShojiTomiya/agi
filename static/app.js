@@ -1,28 +1,88 @@
 // ── state ─────────────────────────────────────────
 let sessionId   = null;
-let pendingFiles = [];   // [{path, filename, previewUrl}]
+let pendingFiles = [];   // [{name, previewUrl}] — uploaded, not sent yet
 let isLoading   = false;
+
+// ── session files ─────────────────────────────────
+// A session's files (uploads, files the model saved, charts) live in
+// uploads/<session>/ under their own names — the same names the model sees.
+const IMAGE_RE = /\.(png|jpg|jpeg|webp|gif)$/i;
+
+// A new chat gets its id in the browser, so files can be uploaded into it
+// before the first message is sent.
+function ensureSessionId() {
+  if (!sessionId) sessionId = crypto.randomUUID();
+  return sessionId;
+}
+
+function fileUrl(name) {
+  const encoded = name.split("/").map(part =>
+    encodeURIComponent(part).replace(/\(/g, "%28").replace(/\)/g, "%29"));
+  return `/uploads/${sessionId}/${encoded.join("/")}`;
+}
+
+function attachmentsFor(names) {
+  return names.map(name => ({ name, previewUrl: IMAGE_RE.test(name) ? fileUrl(name) : null }));
+}
+
+function chartMarkdown(names) {
+  return names.map(name => `\n\n![chart](${fileUrl(name)})`).join("");
+}
+
+function appendDownloads(div, names) {
+  if (!names.length) return;
+  const row = document.createElement("div");
+  row.style.cssText = "display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;";
+  for (const name of names) {
+    const a = document.createElement("a");
+    a.href = fileUrl(name);
+    a.download = name.split("/").pop();
+    a.className = "file-download-btn";
+    a.textContent = `⬇ ${name}`;
+    row.appendChild(a);
+  }
+  div.appendChild(row);
+}
 
 // ── sessions ──────────────────────────────────────
 async function loadSessions() {
   const res      = await fetch("/sessions");
   const sessions = await res.json();
   const el       = document.getElementById("sessions");
+  el.innerHTML   = "";
 
-  el.innerHTML = sessions.map(s => `
-    <div class="session-item ${s.id === sessionId ? "active" : ""}"
-         onclick="loadSession('${s.id}')">
-      <span class="session-title">${escapeHtml(s.title || "Conversation")}</span>
-      <span class="session-rename"
-            onclick="event.stopPropagation(); renameSession('${s.id}', '${escapeHtml(s.title || 'Conversation')}')">✎</span>
-      <span class="session-delete"
-            onclick="event.stopPropagation(); deleteSession('${s.id}')">×</span>
-    </div>
-  `).join("");
+  // built with DOM calls rather than inline onclick strings, which broke on
+  // titles containing an apostrophe
+  for (const s of sessions) {
+    const title = s.title || "Conversation";
+    const item  = document.createElement("div");
+    item.className = "session-item" + (s.id === sessionId ? " active" : "");
+    item.onclick = () => loadSession(s.id);
+
+    const titleEl = document.createElement("span");
+    titleEl.className = "session-title";
+    titleEl.textContent = title;
+
+    const renameEl = document.createElement("span");
+    renameEl.className = "session-rename";
+    renameEl.textContent = "✎";
+    renameEl.onclick = (e) => { e.stopPropagation(); renameSession(s.id, title); };
+
+    const deleteEl = document.createElement("span");
+    deleteEl.className = "session-delete";
+    deleteEl.textContent = "×";
+    deleteEl.onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
+
+    item.append(titleEl, renameEl, deleteEl);
+    el.appendChild(item);
+  }
 }
 
 async function loadSession(id) {
   sessionId = id;
+  // files staged for another session don't belong to this one
+  pendingFiles = [];
+  renderFilePreviews();
   document.getElementById("messages").innerHTML = "";
   clearInspector();
   loadSessions();
@@ -30,67 +90,103 @@ async function loadSession(id) {
   const res  = await fetch(`/sessions/${id}/messages`);
   const rows = await res.json();
 
+  // every bubble remembers which turn (user message id) it belongs to, so clicking
+  // it can show that turn's steps in the inspector
+  let turnId = null;
   for (const row of rows) {
+    if (row.role === "user") turnId = row.id;
+
+    if (row.role === "assistant" && row.metadata?.error) {
+      appendError(row.content).dataset.turnId = turnId;
+      continue;
+    }
+
     if (row.role === "user" || row.role === "assistant") {
-      let previews = [];
-      if (row.role === "user") {
-        const filePaths = (row.metadata?.file_paths || []).map(p => typeof p === "string" ? p : p.path);
-        previews = filePaths.map(p => {
-          const filename = p.split("_").slice(1).join("_") || p;
-          if (p.match(/\.(png|jpg|jpeg|webp|gif)$/i)) return { path: p, previewUrl: "/" + p, filename };
-          return { path: p, filename };
-        });
-      }
-
-      let content = row.content;
-      for (const path of (row.metadata?.chart_paths || [])) {
-        content += `\n\n![chart](/${path})`;
-      }
-
-      const msgDiv = appendMessage(row.role, content, previews, row.id);
-      if (row.role === "assistant") {
-        const nonImgFiles = (row.metadata?.file_paths || []).filter(f => {
-          const p = typeof f === "string" ? f : f.path;
-          return !p.match(/\.(png|jpg|jpeg|webp|gif)$/i);
-        });
-        if (nonImgFiles.length > 0) {
-          const fileRow = document.createElement("div");
-          fileRow.style.cssText = "display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;";
-          for (const f of nonImgFiles) {
-            const p = typeof f === "string" ? f : f.path;
-            const name = typeof f === "string" ? p.split("_").slice(1).join("_") : f.name;
-            const a = document.createElement("a");
-            a.href = `/${p}`;
-            a.download = name;
-            a.className = "file-download-btn";
-            a.textContent = `⬇ ${name}`;
-            fileRow.appendChild(a);
-          }
-          msgDiv.appendChild(fileRow);
-        }
-      }
+      const meta = row.metadata || {};
+      const attachments = row.role === "user" ? attachmentsFor(meta.files || []) : [];
+      const content = row.content + (row.role === "assistant" ? chartMarkdown(meta.charts || []) : "");
+      const msgDiv = appendMessage(row.role, content, attachments, row.id);
+      msgDiv.dataset.turnId = turnId;
+      if (row.role === "assistant") appendDownloads(msgDiv, meta.files || []);
     }
   }
   addCopyButtons();
   addChartButtons(document.getElementById("messages"));
-  buildInspectorFromHistory(rows);
+  if (turnId) showTurn(turnId);
+}
+
+// Load a past turn's saved steps into the inspector.
+async function showTurn(turnId) {
+  const res   = await fetch(`/turns/${turnId}/steps`);
+  const steps = await res.json();
+  clearInspector();
+  steps.forEach(appendStep);
+  markInspected(turnId);
+}
+
+function markInspected(turnId) {
+  document.querySelectorAll("#messages [data-turn-id]").forEach(el => {
+    el.classList.toggle("inspected", el.dataset.turnId === String(turnId));
+  });
 }
 
 
+// ── math ──────────────────────────────────────────
+// Math is cut out while Markdown is parsed — rendering it afterwards was too late:
+// Markdown had already turned \[ \( into [ (, \\ into \ and _ * into italics.
+// $$…$$ and \[…\] are display math, \(…\) and $…$ inline. Like Pandoc, $…$ only
+// counts when it hugs its content and isn't followed by a digit: "$5 and $10" stays text.
+const MATH_BLOCK  = /^ {0,3}(?:\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\])[ \t]*(?:\n+|$)/;
+const MATH_INLINE = /^(?:\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$(?!\s)((?:\\.|[^\\$\n])+?)\$(?!\d))/;
+
+// a placeholder holding the TeX; renderMath fills it in after sanitizing
+function mathHtml(tex, display, raw) {
+  const tag = display ? "div" : "span";
+  return `<${tag} class="math" data-tex="${escapeHtml(tex.trim())}"${display ? " data-display" : ""}>${escapeHtml(raw)}</${tag}>`;
+}
+
+marked.use({ extensions: [
+  {
+    name: "mathBlock", level: "block",
+    start: src => src.match(/^ {0,3}(?:\$\$|\\\[)/m)?.index,
+    tokenizer(src) {
+      const m = MATH_BLOCK.exec(src);
+      if (m) return { type: "mathBlock", raw: m[0], text: m[1] ?? m[2] };
+    },
+    renderer: token => mathHtml(token.text, true, token.raw.trim()) + "\n",
+  },
+  {
+    name: "mathInline", level: "inline",
+    start: src => src.match(/\$|\\[[(]/)?.index,
+    tokenizer(src) {
+      const m = MATH_INLINE.exec(src);
+      if (!m || (m[4] !== undefined && /\s$/.test(m[4]))) return;
+      return { type: "mathInline", raw: m[0], text: m[1] ?? m[2] ?? m[3] ?? m[4],
+               display: m[1] !== undefined || m[2] !== undefined };
+    },
+    renderer: token => mathHtml(token.text, token.display, token.raw),
+  },
+]});
+
+function renderMath(el) {
+  if (!window.katex) return;   // KaTeX didn't load: the TeX source stays readable
+  el.querySelectorAll(".math[data-tex]").forEach(m => {
+    try {
+      katex.render(m.dataset.tex, m, { displayMode: "display" in m.dataset, throwOnError: false });
+    } catch { /* leave the source text */ }
+  });
+}
 
 function renderMd(el, text) {
-  el.innerHTML = marked.parse(text);
-  if (window._katexReady) {
-    renderMathInElement(el, {
-      delimiters: [
-        {left: "$$", right: "$$", display: true},
-        {left: "$", right: "$", display: false},
-        {left: "\\[", right: "\\]", display: true},
-        {left: "\\(", right: "\\)", display: false},
-      ],
-      throwOnError: false,
-    });
-  }
+  // model output can echo HTML from search results or files — never run it;
+  // KaTeX's own markup is added after sanitizing, from the TeX alone
+  el.innerHTML = DOMPurify.sanitize(marked.parse(text));
+  // charts are added by the app; an image the model wrote itself (e.g. attachment://…)
+  // points nowhere and would show up as a broken frame
+  el.querySelectorAll("img").forEach(img => {
+    if (!/^(https?:\/\/|\/uploads\/)/.test(img.getAttribute("src") || "")) img.remove();
+  });
+  renderMath(el);
 }
 
 function addChartButtons(div) {
@@ -156,7 +252,6 @@ function newChat() {
   pendingFiles = [];
   document.getElementById("messages").innerHTML = "";
   clearInspector();
-  document.getElementById("session-tokens").textContent = "Session: 0 tokens";
   renderFilePreviews();
   loadSessions();
 }
@@ -174,29 +269,29 @@ async function buildFileFormData(file) {
   return form;
 }
 
-async function handleFiles(event) {
-  const files = Array.from(event.target.files);
-
-  for (const file of files) {
+// Upload straight into the session's directory; the server answers with the
+// name the file got there (renamed if the session already has one by that name).
+async function uploadFiles(fileList) {
+  for (const file of Array.from(fileList)) {
     const form = await buildFileFormData(file);
+    form.append("session_id", ensureSessionId());
 
     const res = await fetch("/upload", { method: "POST", body: form });
-
     if (!res.ok) {
       const err = await res.json();
       appendError(`Upload failed: ${formatErrorDetail(err.detail)}`);
       continue;
     }
 
-    const data = await res.json();
-    const previewUrl = file.type.startsWith("image/")
-      ? URL.createObjectURL(file)
-      : null;
-
-    pendingFiles.push({ path: data.path, filename: data.filename, previewUrl });
+    const { name } = await res.json();
+    const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
+    pendingFiles.push({ name, previewUrl });
   }
-
   renderFilePreviews();
+}
+
+async function handleFiles(event) {
+  await uploadFiles(event.target.files);
   event.target.value = "";
 }
 
@@ -204,7 +299,7 @@ function renderFilePreviews() {
   const el = document.getElementById("file-preview");
   el.innerHTML = pendingFiles.map((f, i) => `
     <div class="file-chip">
-      <span>${escapeHtml(f.filename)}</span>
+      <span>${escapeHtml(f.name)}</span>
       <span class="file-chip-remove" onclick="removeFile(${i})">×</span>
     </div>
   `).join("");
@@ -257,7 +352,7 @@ function appendMessage(role, content, files = [], msgId = null) {
         } else {
           const chip = document.createElement("span");
           chip.className = "msg-file-chip";
-          chip.textContent = `📎 ${f.filename}`;
+          chip.textContent = `📎 ${f.name}`;
           chipsRow.appendChild(chip);
         }
       });
@@ -302,7 +397,7 @@ function startEdit(div, msgId, originalText, originalFiles = []) {
     originalFiles.forEach(f => {
       const chip = document.createElement("span");
       chip.className = "msg-file-chip";
-      chip.textContent = `📎 ${f.filename}`;
+      chip.textContent = `📎 ${f.name}`;
       chipsRow.appendChild(chip);
     });
     div.appendChild(chipsRow);
@@ -326,10 +421,9 @@ async function confirmEdit(msgId, newText, originalFiles = []) {
   if (editedIdx !== -1) allMsgs.slice(editedIdx).forEach(el => el.remove());
 
   clearInspector();
-  document.querySelector(".regenerate-btn")?.remove();
 
   document.getElementById("input").value = newText;
-  pendingFiles = originalFiles.filter(f => f.path);
+  pendingFiles = originalFiles.filter(f => f.name);
   send();
 }
 
@@ -340,6 +434,7 @@ function appendError(message) {
   div.textContent = `⚠ ${message}`;
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
+  return div;
 }
 
 function showTypingIndicator() {
@@ -356,30 +451,28 @@ function removeTypingIndicator() {
   document.getElementById("typing")?.remove();
 }
 
-function showToolIndicator(div, toolName) {
+function showToolIndicator(div, toolName, { elapsed = true } = {}) {
   removeTypingIndicator();
   removeToolIndicator(div);
   const el = document.createElement("span");
   el.className = "tool-indicator";
   el.textContent = toolName + "…";
   div.appendChild(el);
+  // a long step — code can run up to 30 s — shouldn't look frozen
+  if (elapsed) {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (!el.isConnected) return clearInterval(timer);   // removed or re-rendered away
+      const s = Math.floor((Date.now() - started) / 1000);
+      if (s >= 3) el.textContent = `${toolName}… ${s}s`;
+    }, 1000);
+  }
   document.getElementById("messages").scrollTop =
     document.getElementById("messages").scrollHeight;
 }
 
 function removeToolIndicator(div) {
   div.querySelector(".tool-indicator")?.remove();
-}
-
-function addRegenerateButton() {
-  document.querySelector(".regenerate-btn")?.remove();
-
-  const messages = document.getElementById("messages");
-  const btn = document.createElement("button");
-  btn.className = "regenerate-btn";
-  btn.textContent = "↺ Regenerate";
-  btn.onclick = regenerate;
-  messages.appendChild(btn);
 }
 
 // ── loop inspector ────────────────────────────────
@@ -442,7 +535,14 @@ function renderLoopTab() {
     const ev = inspectorData.events[i];
     const secId = `isec-event-${i}`;
     if (ev.step === "llm_call") {
-      items.push(loopRow("llm", "LLM call", ev.model || "", secId));
+      const stats = llmStats(ev);
+      items.push(loopRow("llm", "LLM call", stats || ev.model || "", secId));
+    } else if (ev.step === "rate_limit_wait") {
+      items.push(loopRow("wait", "Waiting", `rate limit, ${ev.seconds}s`, secId));
+    } else if (ev.step === "retry") {
+      items.push(loopRow("retry", "Retry", ev.reason || "", secId));
+    } else if (ev.step === "error") {
+      items.push(loopRow("error", "Error", ev.message || "", secId));
     } else if (ev.step === "reasoning") {
       const preview = (ev.text || "").slice(0, 40);
       items.push(loopRow("reasoning", "Reasoning", preview + (ev.text?.length > 40 ? "…" : ""), secId));
@@ -470,6 +570,14 @@ function renderUserTab() {
   el.innerHTML = `<pre class="itab-pre">${escapeHtml(d.text || "")}</pre>${filesHtml}`;
 }
 
+// "1,234 tok · 0.8s" for an LLM call once its llm_call_done step has arrived
+function llmStats(ev) {
+  const parts = [];
+  if (ev.usage?.total_tokens) parts.push(ev.usage.total_tokens.toLocaleString() + " tok");
+  if (ev.ms != null) parts.push((ev.ms / 1000).toFixed(1) + "s");
+  return parts.join(" · ");
+}
+
 function makeSec(id, label, content) {
   return `<div class="isec">
     <div class="isec-header" onclick="toggleSection(this)"><span>${escapeHtml(label)}</span><span class="toggle-icon">▶</span></div>
@@ -491,7 +599,10 @@ function renderDynamicSections() {
     if (ev.step === "llm_call") {
       llmIndex++;
       const label = totalLlm > 1 ? `LLM call ${llmIndex}` : "LLM call";
-      const meta = `<div class="itab-meta">${escapeHtml(ev.model || "")}</div>`;
+      const u = ev.usage;
+      const usageText = u ? ` · prompt ${u.prompt_tokens} · completion ${u.completion_tokens}` : "";
+      const timeText = ev.ms != null ? ` · ${(ev.ms / 1000).toFixed(1)}s` : "";
+      const meta = `<div class="itab-meta">${escapeHtml((ev.model || "") + usageText + timeText)}</div>`;
       const bodyHtml = (ev.messages || [])
         .map(m => `<span class="step-role">[${m.role.toUpperCase()}]</span>\n${escapeHtml(m.content)}`)
         .join('\n\n<span class="step-sep">─────────────</span>\n\n');
@@ -505,7 +616,19 @@ function renderDynamicSections() {
       parts.push(makeSec(id, ev.name, `<pre class="itab-pre"><span class="step-role">[ARGS]</span>\n${escapeHtml(args)}</pre>`));
 
     } else if (ev.step === "tool_result") {
-      parts.push(makeSec(id, "Result", `<pre class="itab-pre">${escapeHtml(ev.result || "")}</pre>`));
+      const detail = ev.detail
+        ? `\n\n<span class="step-sep">─────────────</span>\n\n<span class="step-role">[RAW — before condensing]</span>\n${escapeHtml(ev.detail)}`
+        : "";
+      parts.push(makeSec(id, "Result", `<pre class="itab-pre">${escapeHtml(ev.result || "")}${detail}</pre>`));
+
+    } else if (ev.step === "rate_limit_wait") {
+      parts.push(makeSec(id, "Waiting", `<pre class="itab-pre">Rate limit reached — waited ${ev.seconds}s before retrying.</pre>`));
+
+    } else if (ev.step === "retry") {
+      parts.push(makeSec(id, "Retry", `<pre class="itab-pre">The model's tool call was rejected; it was asked to try again.\n\n${escapeHtml(ev.reason || "")}</pre>`));
+
+    } else if (ev.step === "error") {
+      parts.push(makeSec(id, "Error", `<pre class="itab-pre">${escapeHtml(ev.message || "")}</pre>`));
     }
   }
 
@@ -527,8 +650,13 @@ function appendStep(step) {
     renderUserTab();
   } else if (step.step === "file_read") {
     inspectorData.file_reads.push(step);
-  } else if (step.step === "llm_call" || step.step === "reasoning" || step.step === "tool_call" || step.step === "tool_result") {
+  } else if (["llm_call", "reasoning", "tool_call", "tool_result", "rate_limit_wait", "retry", "error"].includes(step.step)) {
     inspectorData.events.push(step);
+    renderDynamicSections();
+  } else if (step.step === "llm_call_done") {
+    // tokens and time belong to the LLM call that just finished
+    const call = [...inspectorData.events].reverse().find(e => e.step === "llm_call");
+    if (call) Object.assign(call, { usage: step.usage, ms: step.ms });
     renderDynamicSections();
   } else if (step.step === "response") {
     inspectorData.response = step;
@@ -564,11 +692,34 @@ async function send() {
   // assistant bubble is created lazily on first content/indicator so an
   // empty message box isn't visible while only "typing..." is shown
   let assistantDiv = null;
+  let turnId = null;   // id of the saved user message, sent in the first event
   function ensureAssistantDiv() {
-    if (!assistantDiv) assistantDiv = appendMessage("assistant", "");
+    if (!assistantDiv) {
+      assistantDiv = appendMessage("assistant", "");
+      if (turnId) assistantDiv.dataset.turnId = turnId;
+    }
     return assistantDiv;
   }
   let accumulated = "";
+
+  // re-parsing the whole answer on every token gets slow for long replies,
+  // so render at most once per animation frame
+  let renderFrame = 0;
+  function renderNow() {
+    cancelAnimationFrame(renderFrame);
+    renderFrame = 0;
+    renderMd(assistantDiv, accumulated);
+    addCopyButtons();
+    document.getElementById("messages").scrollTop =
+      document.getElementById("messages").scrollHeight;
+  }
+  function scheduleRender() {
+    if (!renderFrame) renderFrame = requestAnimationFrame(renderNow);
+  }
+  function cancelRender() {
+    cancelAnimationFrame(renderFrame);
+    renderFrame = 0;
+  }
 
   try {
     const res = await fetch("/chat", {
@@ -576,9 +727,8 @@ async function send() {
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({
         message:    text,
-        session_id: sessionId,
-        file_paths: files.map(f => f.path),
-        filenames:  files.map(f => f.filename),
+        session_id: ensureSessionId(),
+        files:      files.map(f => f.name),
       }),
     });
 
@@ -617,18 +767,23 @@ async function send() {
 
         if (eventType === "session") {
           sessionId = data.session_id;
+          // the user message is saved before the agent runs, so it can be edited
+          // even if this turn fails
+          turnId = data.user_msg_id;
+          userDiv.dataset.msgId = turnId;
+          userDiv.dataset.turnId = turnId;
+          markInspected(turnId);
 
         } else if (eventType === "token") {
           removeTypingIndicator();
           ensureAssistantDiv();
           removeToolIndicator(assistantDiv);
           accumulated += data.token;
-          renderMd(assistantDiv, accumulated);
-          addCopyButtons();
-          document.getElementById("messages").scrollTop =
-            document.getElementById("messages").scrollHeight;
+          scheduleRender();
 
         } else if (eventType === "step") {
+          // a pending render would replace the bubble's HTML and wipe the indicator
+          if (renderFrame) renderNow();
           if (data.step === "llm_call" || data.step === "reasoning_start") {
             removeTypingIndicator();
             ensureAssistantDiv();
@@ -641,39 +796,34 @@ async function send() {
               showToolIndicator(assistantDiv, data.name);
             } else if (data.step === "tool_result") {
               if (assistantDiv) removeToolIndicator(assistantDiv);
+            } else if (data.step === "rate_limit_wait") {
+              removeTypingIndicator();
+              ensureAssistantDiv();
+              showToolIndicator(assistantDiv, `Waiting for rate limit (${Math.ceil(data.seconds)}s)`, { elapsed: false });
             }
             appendStep(data);
           }
 
         } else if (eventType === "error") {
+          cancelRender();
           removeTypingIndicator();
           if (assistantDiv) assistantDiv.remove();
-          appendError(data.message);
+          const errDiv = appendError(data.message);
+          if (turnId) errDiv.dataset.turnId = turnId;
+          appendStep({ step: "error", message: data.message });
 
         } else if (eventType === "done") {
           ensureAssistantDiv();
-          for (const path of (data.chart_paths || [])) {
-            accumulated += `\n\n![chart](/${path})`;
-          }
-          if ((data.chart_paths || []).length > 0) {
+          // flush first, or a late frame would wipe the download buttons added below
+          if (renderFrame) renderNow();
+          const charts = data.charts || [];
+          if (charts.length) {
+            accumulated += chartMarkdown(charts);
             renderMd(assistantDiv, accumulated);
             addChartButtons(assistantDiv);
             addCopyButtons();
           }
-          if ((data.file_paths || []).length > 0) {
-            const fileRow = document.createElement("div");
-            fileRow.style.cssText = "display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;";
-            for (const f of data.file_paths) {
-              const a = document.createElement("a");
-              a.href = `/${f.path}`;
-              a.download = f.name;
-              a.className = "file-download-btn";
-              a.textContent = `⬇ ${f.name}`;
-              fileRow.appendChild(a);
-            }
-            assistantDiv.appendChild(fileRow);
-          }
-          if (data.user_msg_id) userDiv.dataset.msgId = data.user_msg_id;
+          appendDownloads(assistantDiv, data.files || []);
           document.getElementById("messages").scrollTop =
             document.getElementById("messages").scrollHeight;
           loadSessions();
@@ -682,6 +832,7 @@ async function send() {
     }
 
   } catch (err) {
+    cancelRender();
     removeTypingIndicator();
     if (assistantDiv) assistantDiv.remove();
     appendError(`Connection error: ${err.message}`);
@@ -691,11 +842,6 @@ async function send() {
     document.getElementById("send-btn").disabled = false;
     removeTypingIndicator();
   }
-}
-
-// ── inspector from history ────────────────────────
-function buildInspectorFromHistory(rows) {
-  clearInspector();
 }
 
 // ── reload prompt ─────────────────────────────────
@@ -752,28 +898,14 @@ chatPanel.addEventListener("dragleave", (e) => {
 chatPanel.addEventListener("drop", async (e) => {
   e.preventDefault();
   chatPanel.classList.remove("drag-over");
+  await uploadFiles(e.dataTransfer.files);
+});
 
-  const files = Array.from(e.dataTransfer.files);
-  for (const file of files) {
-    const form = await buildFileFormData(file);
-
-    const res = await fetch("/upload", { method: "POST", body: form });
-
-    if (!res.ok) {
-      const err = await res.json();
-      appendError(`Upload failed: ${formatErrorDetail(err.detail)}`);
-      continue;
-    }
-
-    const data = await res.json();
-    const previewUrl = file.type.startsWith("image/")
-      ? URL.createObjectURL(file)
-      : null;
-
-    pendingFiles.push({ path: data.path, filename: data.filename, previewUrl });
-  }
-
-  renderFilePreviews();
+// clicking a message shows its turn in the inspector
+document.getElementById("messages").addEventListener("click", (e) => {
+  if (isLoading || e.target.closest("button, a, textarea")) return;
+  const bubble = e.target.closest("[data-turn-id]");
+  if (bubble) showTurn(bubble.dataset.turnId);
 });
 
 // ── init ──────────────────────────────────────────
